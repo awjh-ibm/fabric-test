@@ -15,7 +15,7 @@ import { Logger } from '../../utils/logger';
 import { getEnvVarsForCli, jsonResponseEqual, sleep } from '../utils/functions';
 import { Workspace } from '../utils/workspace';
 
-const logger = Logger.getLogger('./src/step-definitions/chaincode/chaincode.ts');
+const logger = Logger.getLogger('./src/step-definitions/chaincode/lifecycle.ts');
 
 type TransactionType = 'submit' | 'evaluate';
 
@@ -49,14 +49,14 @@ export class Chaincode {
     public async configureEndorsementPolicy(chaincodeName: string, channelName: string, policyName: string) {
         const policy = Policy.build(policyName, this.workspace.network.getChannel(channelName));
 
-        this.workspace.updateChaincodePolicy(chaincodeName, policy);
+        this.workspace.updateChaincodePolicy(channelName, chaincodeName, policy);
     }
 
     @given(/Chaincode ['"](.*)['"] when instantiated on channel ['"](.*)['"] will use private data collection config ['"](.*)['"]$/)
-    public async configurePrivateCollection(chaincodeName: string, __: string, collectionFile: string) {
+    public async configurePrivateCollection(chaincodeName: string, channelName: string, collectionFile: string) {
         const collection = path.join(__dirname, '../../..', 'resources/private-collections', collectionFile);
 
-        this.workspace.updateChaincodeCollection(chaincodeName, collection);
+        this.workspace.updateChaincodeCollection(channelName, chaincodeName, collection);
     }
 
     @given(/Organisation ['"](.*)['"] has instantiated the chaincode ['"](.*)['"] on channel ['"](.*)['"]$/)
@@ -95,6 +95,22 @@ export class Chaincode {
         logger.debug(`Set transient data for transaction ${functionName}`, transientData);
 
         txn.setTransient(transientData);
+    }
+
+    @given(/I have retrieved the metadata for chaincode ['"](.*)['"] on channel ['"](.*)['"]$/)
+    public async getMetadata(chaincodeName: string, channelName: string) {
+        const channel = this.workspace.getChannelChaincodes(channelName);
+        const chaincode = channel.get(chaincodeName);
+
+        if (chaincode.metadata) {
+            return;
+        }
+
+        const org = this.workspace.network.getOrganisations()[0];
+        const txn = await this.buildTransaction(org.name, chaincodeName, 'org.hyperledger.fabric:GetMetadata', channelName, 'admin');
+        const metadata = await this.handleTransaction(txn, 'evaluate', []);
+
+        this.workspace.updateChaincodeMetadata(channelName, chaincodeName, metadata);
     }
 
     @when(/Organisation ['"](.*)['"] (submit|evaluate)s against the chaincode ['"](.*)['"] the transaction ['"](.*)['"] on channel ['"](.*)['"] as ['"](.*)['"]$/)
@@ -269,8 +285,10 @@ export class Chaincode {
         let policy = '';
         let collection = '';
 
-        if (this.workspace.chaincodes.has(chaincodeName)) {
-            const chaincode = this.workspace.chaincodes.get(chaincodeName);
+        const channel = this.workspace.getChannelChaincodes(channelName);
+
+        if (channel.has(chaincodeName)) {
+            const chaincode = channel.get(chaincodeName);
             if (chaincode.policy) {
                 policy = `-P "${chaincode.policy.split('"').join('\\"')}"`;
             }
@@ -297,6 +315,10 @@ export class Chaincode {
                 }
                 await sleep(2000);
             }
+        }
+
+        if (!channel.has(chaincodeName)) {
+            this.workspace.addChaincode(channelName, chaincodeName);
         }
     }
 
